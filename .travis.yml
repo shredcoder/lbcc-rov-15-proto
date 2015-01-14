@@ -3,7 +3,8 @@ install:
   - sudo apt-get update -qq
   - sudo apt-get install picocom
   - git clone git://github.com/amperka/ino.git
-  - make install ino
+  - cd ino
+  - make install
   - pip install ino
 script:
   - ino build
