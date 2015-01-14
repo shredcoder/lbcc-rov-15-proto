@@ -6,7 +6,7 @@ install:
   - cd ino
   - sudo make install
   - sudo pip install ino
-  - cd..
+  - cd ..
 script:
   - ino build
 branches:
