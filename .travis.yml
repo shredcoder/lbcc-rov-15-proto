@@ -4,8 +4,8 @@ install:
   - sudo apt-get install picocom
   - git clone git://github.com/amperka/ino.git
   - cd ino
-  - make install
-  - pip install ino
+  - sudo make install
+  - sudo pip install ino
 script:
   - ino build
 branches:
