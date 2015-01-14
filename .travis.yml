@@ -1,7 +1,13 @@
 language: "Arduino"
-before_install: "sudo apt-get update"
-install: "sudo apt-get install ino"
-script: "ino build"
+before_install:
+	- sudo apt-get update
+install:
+	- sudo apt-get install picocom
+	- git clone git://github.com/amperka/ino.git
+	- make install
+	- pip install ino
+script:
+	- ino build
 branches:
   only:
     - master
