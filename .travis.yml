@@ -1,0 +1,5 @@
+language: "arduino"
+script: "ino build"
+branches:
+  only:
+    - master
