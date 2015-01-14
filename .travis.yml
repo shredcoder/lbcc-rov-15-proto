@@ -1,5 +1,6 @@
 language: "Arduino"
-install: "ino"
+before_install: "sudo apt-get update"
+install: "sudo apt-get install ino"
 script: "ino build"
 branches:
   only:
