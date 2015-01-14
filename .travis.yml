@@ -1,4 +1,4 @@
-language: "arduino"
+language: "Arduino"
 script: "ino build"
 branches:
   only:
