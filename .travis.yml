@@ -1,12 +1,12 @@
-language: "arduino"
+language: c
 install:
-	- sudo apt-get update -qq
-	- sudo apt-get install picocom
-	- git clone git://github.com/amperka/ino.git
-	- make install
-	- pip install ino
+  - sudo apt-get update -qq
+  - sudo apt-get install picocom
+  - git clone git://github.com/amperka/ino.git
+  - make install
+  - pip install ino
 script:
-	- ino build
+  - ino build
 branches:
   only:
     - master
