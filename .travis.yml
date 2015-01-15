@@ -9,6 +9,7 @@ before_install:
   - cd ..
 install:
   - sudo apt-get install python-setuptools python-pip picocom
+  - sudo apt-get install gcc-avr avrdude avr-libc
   - sudo dpkg -i prereq/librxtx-java_2.2pre2-13_amd64.deb
   - sudo dpkg -i prereq/arduino-core_1.0.5+dfsg2-4_all.deb
   - sudo dpkg -i prereq/arduino_1.0.5+dfsg2-4_all.deb
