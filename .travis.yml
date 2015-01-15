@@ -16,7 +16,7 @@ install:
   - git clone git://github.com/amperka/ino.git
   - cd ino
   - sudo make install
-  - pip install ino
+  - sudo pip install ino
   - cd ..
 script:
   - ino build
