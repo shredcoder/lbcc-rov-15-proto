@@ -1,12 +1,21 @@
 language: c
-install:
+before_install:
   - sudo apt-get update -qq
-  - sudo apt-get install python-setuptools python-pip
-  - sudo apt-get install arduino arduino-core picocom
+  - mkdir prereq
+  - cd prereq/
+  - wget http://http.us.debian.org/debian/pool/main/r/rxtx/librxtx-java_2.2pre2-13_amd64.deb
+  - wget http://http.us.debian.org/debian/pool/main/a/arduino/arduino-core_1.0.5+dfsg2-4_all.deb
+  - wget http://http.us.debian.org/debian/pool/main/a/arduino/arduino_1.0.5+dfsg2-4_all.deb
+  - cd ..
+install:
+  - sudo apt-get install python-setuptools python-pip picocom
+  - sudo dpkg -i prereq/librxtx-java_2.2pre2-13_amd64.deb
+  - sudo dpkg -i prereq/arduino-core_1.0.5+dfsg2-4_all.deb
+  - sudo dpkg -i prereq/arduino_1.0.5+dfsg2-4_all.deb
   - git clone git://github.com/amperka/ino.git
   - cd ino
   - sudo make install
-  - sudo pip install ino
+  - pip install ino
   - cd ..
 script:
   - ino build
