@@ -77,7 +77,7 @@ void broadcast (int gap) {
 
 	static unsigned long last = -gap;
 	static const IPAddress BROADCAST_IP (255,255,255,255);
-	static const int BROADCAST_PORT (8888);
+	static const int BROADCAST_PORT (21025);
 
 	if (millis() - last > gap) {
 		last = millis();
@@ -86,7 +86,13 @@ void broadcast (int gap) {
 		Serial.println(ip_to_str(BROADCAST_IP));
 		Serial.print("PORT: ");
 		Serial.println(BROADCAST_PORT, DEC);
+
+                Udp.beginPacket(BROADCAST_IP, BROADCAST_PORT);
+	        Udp.write("BROADCASTING!");
+	        Udp.endPacket();
 	}
+
+	
 }
 
 /* ============================================================================
