@@ -1,0 +1,1 @@
+xcopy /y /s . %UserProfile%\Documents\Arduino\libraries\ /exclude:copyExclude.txt
