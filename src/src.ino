@@ -32,9 +32,8 @@ class Attachment
 	public:
 		char*	name;
 		bool	readonly;
-		virtual int		get() { return -1; }
-		virtual bool	set(int) { return false; }
-		virtual void	update() {}
+		virtual int		get() = 0;
+		virtual bool	set(int) = 0;
 };
 
 // ============================================================================
@@ -46,6 +45,8 @@ class MotorESC: public Attachment
 	public:
 		MotorESC(char*, int, int, int, int);
 		// Repeated, so we can set them outside of the class.
+		int get();
+		bool set(int);
 	private:
 		int pin; // this will become "channel" for the PWM shield
 		int value;
@@ -66,8 +67,12 @@ MotorESC::MotorESC(char* name, int pin, int low, int zero, int high)
 	maxValue		= high;
 
 	value			= zero;
+}
 
+void MotorESC::init()
+{
 	servo.attach(pin);
+	this->set(value);
 }
 
 int MotorESC::get()
@@ -80,14 +85,8 @@ bool MotorESC::set(int newValue)
 	if (newValue > maxValue) return false;
 	if (newValue < minValue) return false;
 	value = newValue;
+	servo.write(value);
 	return true;
-}
-
-void MotorESC::update()
-{
-	// Using a PWM board, this should do nothing, really.
-	// Using the Servo library, when need to write here.
-	servo.writeMicroseconds(value);
 }
 
 // ============================================================================
@@ -96,11 +95,7 @@ void MotorESC::update()
 
 EthernetUDP UDP;
 
-Attachment attachments[] =
-{
-	MotorESC("servo1", 2, 1000, 1500, 2000),
-	MotorESC("servo2", 3, 1000, 1500, 2000)
-};
+MotorESC servo1;
 
 void setup()
 {
@@ -117,7 +112,6 @@ void setup()
 	// Open the listening socket on the right port.
 	UDP.begin(port);
 
-
 	Serial.println();
 	Serial.print("rov@");
 	Serial.print(ip_to_str(Ethernet.localIP()));
@@ -125,6 +119,8 @@ void setup()
 	Serial.println(port, DEC);
 	Serial.print("DEBUGGING: ");
 	Serial.println(DEBUGGING ? "ON (Things will be slow!)" : "OFF" );
+
+	servo1 = MotorESC("servo1", 3, 750, 1000, 2250);
 }
 
 // ============================================================================
@@ -136,8 +132,7 @@ long lastComm = 0;
 void loop()
 {
 	tickIncomingPacket();
-	//tickLostMode();
-	tickPulseMotors();
+	delay(20);
 }
 
 void tickIncomingPacket()
@@ -177,7 +172,7 @@ void tickIncomingPacket()
 
 			Serial.println(root["ping"].asString());
 
-			if (String("rov").equals(root["ping"].asString())) {
+			if (String(root["ping"].asString()).equals("rov")) {
 
 				const int BUFFER_SIZE = JSON_OBJECT_SIZE(1) + JSON_ARRAY_SIZE(0);
 				StaticJsonBuffer<BUFFER_SIZE> jsonBuffer;
@@ -226,15 +221,6 @@ void tickIncomingPacket()
 			Serial.println(F("[NOT REPLYING]"));
 
 		}
-	}
-}
-
-void tickPulseMotors()
-{
-	for (int i = 0; i < sizeof(attachments); i++) {
-		Serial.println("Updating ");
-		Serial.println(attachments[i].name);
-		attachments[i].update();
 	}
 }
 
