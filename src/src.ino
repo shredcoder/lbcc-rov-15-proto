@@ -17,7 +17,7 @@
 //	Settings
 // ============================================================================
 
-bool DEBUGGING = true;
+bool DEBUGGING = false;
 
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 
@@ -28,6 +28,7 @@ IPAddress subnet	(255,0,0,0);
 unsigned int port = 21025;
 
 int AttachmentCount = 1;
+
 Attachment* attachments[] =
 {
 	new MotorESC("leftTopVector", 3, 500, 1000, 1500)
@@ -72,82 +73,105 @@ void setup()
 
 void loop()
 {
-	tickIncomingPacket();
+	tickInboundPacket();
+	//tickOutboundPacket();
 }
 
-void tickIncomingPacket()
+// Deal with a single incoming packet from anywhere.
+void tickInboundPacket()
 {
-	static const int MAX_SIZE = 64;
-	static char* json = new char[MAX_SIZE];
+	const int MAX_INBOUND_PACKET_SIZE = 256;
+	const int MAX_OUTBOUND_PACKET_SIZE = 64;
+
+	const int INBOUND_BUFFER_SIZE = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(16);
+	const int OUTBOUND_BUFFER_SIZE = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(0);
+
+	static char* reqJson = new char[MAX_INBOUND_PACKET_SIZE];
+	static char* resJson = new char[MAX_INBOUND_PACKET_SIZE];
 
 	int packetSize = UDP.parsePacket();
 
 	if (packetSize) {
 
-		UDP.read(json, MAX_SIZE);
-		logPacket(UDP.remoteIP(), UDP.remotePort(), "RECEIVED", packetSize, json);
+		UDP.read(reqJson, MAX_INBOUND_PACKET_SIZE);
+		logPacket(UDP.remoteIP(), UDP.remotePort(), "RECEIVED", packetSize, reqJson);
+		StaticJsonBuffer<INBOUND_BUFFER_SIZE> jsonBufferIn;
+		JsonObject& request = jsonBufferIn.parseObject(reqJson);
 
-		const int BUFFER_SIZE = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(0);
-		
-		StaticJsonBuffer<BUFFER_SIZE> jsonBufferIn;
-		JsonObject& req = jsonBufferIn.parseObject(json);
+		if (request.success()) {
 
-		StaticJsonBuffer<BUFFER_SIZE> jsonBufferOut;
-		JsonObject& res = jsonBufferOut.createObject();
+			if (String(request["ping"].asString()).equals("rov")) {
 
-		if (req.success()) {
-
-			if (String(req["ping"].asString()).equals("rov")) {
-
-				res["okay"] = true;
-				res["pong"] = "watching"; // controlling
+				StaticJsonBuffer<OUTBOUND_BUFFER_SIZE> jsonBufferOut;
+				JsonObject& response = jsonBufferOut.createObject();
+				response["pong"] = "controlling"; // watchings
+				response.printTo(resJson, MAX_OUTBOUND_PACKET_SIZE);
+				logPacket(UDP.remoteIP(), UDP.remotePort(), "SEND", sizeof(resJson), resJson);
+				UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+				UDP.write(resJson);
+				UDP.endPacket();
 				
-			} else if (String(req["cmd"].asString()).equals("set")) {
+			} else if (String(request["cmd"].asString()).equals("set")) {
 
-				int c = req["channel"];
-				int v = req["value"];
+				JsonArray& list = request["list"];
+				int count;
 
-				if (c > 0 and c <= AttachmentCount) {
-
-					if (attachments[c-1]->set(v)) {
-
-						res["okay"] = true;
-						res["channel"] = c;
-						res["value"] = v;
-
-					} else {
-
-						res["okay"] = false;
-						res["channel"] = c;
-						res["value"] = v;
-						res["msg"] = "invalid value";
-
-					}
-
-				} else {
-
-					res["okay"] = false;
-					res["channel"] = c;
-					res["msg"] = "invalid channel";
-
+				if (request["list"].is<JsonArray&>()) {
+					count = list.size();
+					Serial.print("Setting ");
+					Serial.print(count, DEC);
+					Serial.println(" values.");
 				}
 
+				if (count > 0 && count <= AttachmentCount) {
+					for (int i = 0; i < count; i++) {
+
+						int c = list[i]["c"];
+						int v = list[i]["v"];
+
+						if (c > 0 and c <= AttachmentCount) {
+							if (attachments[c-1]->set(v)) {
+
+								StaticJsonBuffer<OUTBOUND_BUFFER_SIZE> jsonBufferOut;
+								JsonObject& response = jsonBufferOut.createObject();
+								response["cmd"] = "is";
+								response["c"] = c;
+								response["v"] = v;
+								response.printTo(resJson, MAX_OUTBOUND_PACKET_SIZE);
+								logPacket(UDP.remoteIP(), UDP.remotePort(), "SEND", sizeof(resJson), resJson);
+								UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+								UDP.write(resJson);
+								UDP.endPacket();
+
+							} else {
+
+								if (DEBUGGING) {
+									Serial.println("Illegal channel value!");
+								}
+
+							}
+						
+						} else {
+
+							if (DEBUGGING) {
+								Serial.print("Illegal channel! ");
+								Serial.println(c);
+							}
+
+						}
+					}
+				}
 			}
 
 			lastComm = millis();
 
 		} else {
 
-			res["okay"] = false;
-			res["msg"] = "bad json";
+			if (DEBUGGING) {
+				Serial.println("Ignoring bad json.");
+			}
 
 		}
-
-		res.printTo(json, MAX_SIZE);
-		logPacket(UDP.remoteIP(), UDP.remotePort(), "SEND", sizeof(json), json);
-		UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
-		UDP.write(json);
-		UDP.endPacket();
 	}
 }
 
