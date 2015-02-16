@@ -2,182 +2,232 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <EthernetUdp.h>
+// Clever trick I discovered. :3
+#define UDP_TX_PACKET_MAX_SIZE 256
 #include <Servo.h>
 
-
+// 3rd Party Libraries
+#include <LinkedList.h>
 // For some strange reason, this cpp is needed.
 // This prevents an error about multiple definitions.
 #include <ArduinoJson.h>
 #include <ArduinoJson.cpp>
 
+// Our Code
 // The Attachment classes and code.
 #include <attachments.h>
+
+
 
 // ============================================================================
 //	Settings
 // ============================================================================
 
-bool DEBUGGING = false;
+// If true, you must suffer the wrath of a million Serial.println()s.
+// Please leave false unless you are developing or debugging.
+bool DEBUGGING = true;
 
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+// MAC address--generally don't touch this, but can be different.
+byte MAC[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 
-IPAddress ip		(10,1,1,1);
-IPAddress gateway	(10,0,0,1);
-IPAddress subnet	(255,0,0,0);
+// Port to communicate on--matches desktop app.
+unsigned int PORT = 21025;
 
-unsigned int port = 21025;
+// IP to use if DHCP fails.
+IPAddress STATIC_IP	(10,1,1,1);
+IPAddress GATEWAY	(10,0,0,1);
+IPAddress SUBNET	(255,0,0,0);
 
-int AttachmentCount = 1;
 
-Attachment* attachments[] =
-{
-	new MotorESC("leftTopVector", 3, 500, 1000, 1500)
-};
 
 // ============================================================================
-//	Main
+//	Core
 // ============================================================================
-
-long lastComm = 0;
 
 EthernetUDP UDP;
+LinkedList<Attachment*> attachments;
 
 void setup()
 {
-	// Spin up serial comms for debugging.
-	// Beware Leonardo bug.
+	// Spin up serial comms, mainly for debugging.
+	// Beware a bug on Leonardo boards, which requires a loop here.
 	Serial.begin(9600);
+	Serial.println(F("\n\nROV start up..."));
+
+	// The list of attachments. See "attachments.h" for options.
+	// Keep this list up-to-date with real devices connected to the ROV.
+	attachments.add(new MotorESC("leftTopVector", 3, 500, 1000, 1500));
 
 	// Attempt to get an IP from the router.
-	if (Ethernet.begin(mac) == 0) {
+	if (Ethernet.begin(MAC) == 0) {
 		// DHCP will timeout after 1 minute.
 		// If it fails, start with a static IP.
-		Ethernet.begin(mac, ip, gateway, subnet);
+		Ethernet.begin(MAC, STATIC_IP, GATEWAY, SUBNET);
 	}
 
 	// Open the listening socket on the right port.
-	UDP.begin(port);
+	UDP.begin(PORT);
 
 	// Print information about IP address and port.
-	logListeningAt(Ethernet.localIP(), port);
+	logListeningAt();
 
-	// Initialize the components that need to be.
-	for (int i = 0; i < AttachmentCount; i++) {
-		attachments[i]->init();
+	// Initialize the components that need it, like Servo-using attachments.
+	// init() is an Attachment class function.
+	for (int i = 0; i < attachments.size(); i++) {
+		attachments.get(i)->init();
 	}
 }
+
+
 
 // ============================================================================
 //	Loop Tasks
 // ============================================================================
 
-void loop()
+
+
+const int MAX_INBOUND_PACKET_SIZE = 256;
+
+const int INBOUND_BUFFER_SIZE = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(16);
+const int OUTBOUND_BUFFER_SIZE = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(0);
+
+char* reqJson = new char[MAX_INBOUND_PACKET_SIZE];
+char* resJson = new char[UDP_TX_PACKET_MAX_SIZE];
+
+long lastComm = 0;
+IPAddress owner;
+
+
+
+void loop ()
 {
-	tickInboundPacket();
-	//tickOutboundPacket();
+	handleInboundPacket();
 }
 
+
+
 // Deal with a single incoming packet from anywhere.
-void tickInboundPacket()
+void handleInboundPacket()
 {
-	const int MAX_INBOUND_PACKET_SIZE = 256;
-	const int MAX_OUTBOUND_PACKET_SIZE = 64;
-
-	const int INBOUND_BUFFER_SIZE = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(16);
-	const int OUTBOUND_BUFFER_SIZE = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(0);
-
-	static char* reqJson = new char[MAX_INBOUND_PACKET_SIZE];
-	static char* resJson = new char[MAX_INBOUND_PACKET_SIZE];
-
 	int packetSize = UDP.parsePacket();
 
 	if (packetSize) {
 
 		UDP.read(reqJson, MAX_INBOUND_PACKET_SIZE);
-		logPacket(UDP.remoteIP(), UDP.remotePort(), "RECEIVED", packetSize, reqJson);
+		logPacket("RECEIVED", packetSize, reqJson);
+
 		StaticJsonBuffer<INBOUND_BUFFER_SIZE> jsonBufferIn;
 		JsonObject& request = jsonBufferIn.parseObject(reqJson);
 
+		StaticJsonBuffer<UDP_TX_PACKET_MAX_SIZE> jsonBufferOut;
+		JsonObject& response = jsonBufferOut.createObject();
+
 		if (request.success()) {
-
-			if (String(request["ping"].asString()).equals("rov")) {
-
-				StaticJsonBuffer<OUTBOUND_BUFFER_SIZE> jsonBufferOut;
-				JsonObject& response = jsonBufferOut.createObject();
-				response["pong"] = "controlling"; // watchings
-				response.printTo(resJson, MAX_OUTBOUND_PACKET_SIZE);
-				logPacket(UDP.remoteIP(), UDP.remotePort(), "SEND", sizeof(resJson), resJson);
-				UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
-				UDP.write(resJson);
-				UDP.endPacket();
-				
-			} else if (String(request["cmd"].asString()).equals("set")) {
-
-				JsonArray& list = request["list"];
-				int count;
-
-				if (request["list"].is<JsonArray&>()) {
-					count = list.size();
-					Serial.print("Setting ");
-					Serial.print(count, DEC);
-					Serial.println(" values.");
-				}
-
-				if (count > 0 && count <= AttachmentCount) {
-					for (int i = 0; i < count; i++) {
-
-						int c = list[i]["c"];
-						int v = list[i]["v"];
-
-						if (c > 0 and c <= AttachmentCount) {
-							if (attachments[c-1]->set(v)) {
-
-								StaticJsonBuffer<OUTBOUND_BUFFER_SIZE> jsonBufferOut;
-								JsonObject& response = jsonBufferOut.createObject();
-								response["cmd"] = "is";
-								response["c"] = c;
-								response["v"] = v;
-								response.printTo(resJson, MAX_OUTBOUND_PACKET_SIZE);
-								logPacket(UDP.remoteIP(), UDP.remotePort(), "SEND", sizeof(resJson), resJson);
-								UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
-								UDP.write(resJson);
-								UDP.endPacket();
-
-							} else {
-
-								if (DEBUGGING) {
-									Serial.println("Illegal channel value!");
-								}
-
-							}
-						
-						} else {
-
-							if (DEBUGGING) {
-								Serial.print("Illegal channel! ");
-								Serial.println(c);
-							}
-
-						}
-					}
-				}
-			}
-
-			lastComm = millis();
-
-		} else {
-
-			if (DEBUGGING) {
-				Serial.println("Ignoring bad json.");
-			}
-
+			handleRequest(request, response);
+		} else if (DEBUGGING) {
+			Serial.println("Ignoring bad json!");
+			request.printTo(Serial);
+			Serial.println();
 		}
 	}
 }
 
+
+
+// ============================================================================
+//	Commands
+// ============================================================================
+
+
+
+bool handleRequest (JsonObject& req, JsonObject& res)
+{
+	if (req.containsKey("cmd")) {
+
+		const char* cmd = req["cmd"].asString();
+		Serial.println(cmd);
+
+		if (String("ping").equals(cmd)) { return handlePingCommand(res, res); }
+		if (String("list").equals(cmd)) { return handleListCommand(res, res); }
+		if (String("get").equals(cmd)) { return handleGetCommand(res, res); }
+		if (String("set").equals(cmd)) { return handleSetCommand(res, res); }
+
+		if (DEBUGGING) {
+			Serial.println(F("Ignoring unknown command!"));
+			return false;
+		}
+
+	} else if (DEBUGGING) {
+		Serial.println(F("Ignoring request without command!"));
+		return false;
+	}
+}
+
+
+
+bool isSame(IPAddress ip1, IPAddress ip2)
+{
+	return ip1[0] == ip2[0]
+		and ip1[1] == ip2[1]
+		and ip1[2] == ip2[2]
+		and ip1[3] == ip2[3];
+}
+
+
+
+// Currently, only accepts one controlling computer.
+bool handlePingCommand (JsonObject& req, JsonObject& res)
+{
+	int isCtl = req["ctl"];
+	Serial.println(isCtl);
+	if (req["ctl"].as<bool>() and lastComm == 0) { owner = UDP.remoteIP(); }
+	return sendPongCommand(res, isSame(owner, UDP.remoteIP()), attachments.size());
+}
+
+
+
+// Sends a pong command to the last UDP remote computer.
+bool sendPongCommand (JsonObject& res, bool controlling, int channelCount)
+{
+	res["cmd"] = "pong";
+	res["ctl"] = controlling;
+	res["chn"] = channelCount;
+	res.printTo(resJson, UDP_TX_PACKET_MAX_SIZE);
+	logPacket("SEND", UDP_TX_PACKET_MAX_SIZE, resJson);
+	UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+	UDP.write(resJson);
+	UDP.endPacket();
+	return true;
+}
+
+
+
+bool handleListCommand (JsonObject& req, JsonObject& res)
+{
+	return false;
+}
+
+
+
+bool handleGetCommand (JsonObject& req, JsonObject& res)
+{
+	return false;
+}
+
+
+
+bool handleSetCommand (JsonObject& req, JsonObject& res)
+{
+	return false;
+}
+
+
+
 // ============================================================================
 //	Debugging
 // ============================================================================
+
+
 
 const char* ip_to_str(const IPAddress ipAddr)
 {
@@ -186,29 +236,32 @@ const char* ip_to_str(const IPAddress ipAddr)
 	return buf;
 }
 
-void logListeningAt(IPAddress ip, int port)
+
+
+void logListeningAt()
 {
-	Serial.println();
-	Serial.print("rov@");
-	Serial.print(ip_to_str(ip));
-	Serial.print(":");
-	Serial.println(port, DEC);
-	Serial.print("DEBUGGING: ");
-	Serial.println(DEBUGGING ? "ON (Things will be slow!)" : "OFF" );
+	Serial.print(F("rov@"));
+	Serial.print(ip_to_str(Ethernet.localIP()));
+	Serial.print(F(":"));
+	Serial.println(PORT, DEC);
+	Serial.print(F("DEBUGGING: "));
+	Serial.println(DEBUGGING ? F("ON (Things will be slow!!!)") : F("OFF") );
 }
 
-void logPacket(IPAddress ip, int port, char* message, int c, char* buffer)
+
+
+void logPacket(char* message, int c, char* buffer)
 {
 	if (DEBUGGING) {
-		Serial.print("[");
+		Serial.print(F("["));
 		Serial.print(message);
-		Serial.print("] [");
+		Serial.print(F("] ["));
 		Serial.print(c);
-		Serial.print(" bytes] ");
-		Serial.print(ip_to_str(ip));
-		Serial.print(":");
+		Serial.print(F(" bytes] "));
+		Serial.print(ip_to_str(UDP.remoteIP()));
+		Serial.print(F(":"));
 		Serial.println(UDP.remotePort());
-		Serial.print("[PACKET] ");
+		Serial.print(F("[PACKET] "));
 		Serial.println(buffer);
 	}
 }
