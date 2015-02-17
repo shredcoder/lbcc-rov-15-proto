@@ -1,9 +1,8 @@
 // Native Arduino Hardware/Libraries
 #include <SPI.h>
-#include <Wire.h>
+#include <Servo.h>
 
 // 3rd Party Libraries
-#include <Adafruit_PWMServoDriver.h>
 #include <EthernetV2_0.h>
 #include <EthernetUdpV2_0.h>
 #include <LinkedList.h>
@@ -12,11 +11,16 @@
 #include <ArduinoJson.h>
 #include <ArduinoJson.cpp>
 
-#include <ROV.h>
+// Our Code
+// The Attachment classes and code.
+#include <attachments.h>
 
-// Clever trick I discovered: you can redefine this. :3
-// UNTESTED VALUE! This might be WAY too high.
-#define UDP_TX_PACKET_MAX_SIZE 2048
+// Clever trick I discovered. :3
+#define UDP_TX_PACKET_MAX_SIZE 256
+
+// Needed for Seeed Studio Ethernet Shield
+#define W5200_CS  10
+#define SDCARD_CS 4
 
 // ============================================================================
 //	Settings
@@ -37,12 +41,14 @@ IPAddress STATIC_IP	(10,1,1,1);
 IPAddress GATEWAY	(10,0,0,1);
 IPAddress SUBNET	(255,0,0,0);
 
+
 // ============================================================================
 //	Core
 // ============================================================================
 
 EthernetUDP UDP;
-ROV * rov;
+LinkedList<Attachment*> attachments;
+
 
 void setup()
 {
@@ -51,7 +57,13 @@ void setup()
 	Serial.begin(9600);
 	Serial.println(F("\n\nROV start up..."));
 
-	rov = new ROV();
+	//Deselect the SD card
+	pinMode(SDCARD_CS,OUTPUT);
+	digitalWrite(SDCARD_CS,HIGH);
+
+	// The list of attachments. See "attachments.h" for options.
+	// Keep this list up-to-date with real devices connected to the ROV.
+	attachments.add(new MotorESC("leftTopVector", 3, 500, 1000, 1500));
 
 	// Attempt to get an IP from the router.
 	if (Ethernet.begin(MAC) == 0) {
@@ -60,11 +72,17 @@ void setup()
 		Ethernet.begin(MAC, STATIC_IP, GATEWAY, SUBNET);
 	}
 
-	// Open the communications socket on the right port.
+	// Open the listening socket on the right port.
 	UDP.begin(PORT);
 
-	// Log information about our IP address and port.
+	// Print information about IP address and port.
 	logListeningAt();
+
+	// Initialize the components that need it, like Servo-using attachments.
+	// init() is an Attachment class function.
+	for (int i = 0; i < attachments.size(); i++) {
+		attachments.get(i)->init();
+	}
 }
 
 
@@ -72,73 +90,80 @@ void setup()
 //	Loop Tasks
 // ============================================================================
 
-void loop ()
-{
-	readPacket();
-	delay(1);
-}
 
-const int CHAR_BUFFER_SIZE = UDP_TX_PACKET_MAX_SIZE;
-const int JSON_BUFFER_SIZE = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(16);
-char incoming [CHAR_BUFFER_SIZE];
+const int MAX_INBOUND_PACKET_SIZE = 256;
+
+const int INBOUND_BUFFER_SIZE = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(16);
+const int OUTBOUND_BUFFER_SIZE = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(0);
+
+char* reqJson = new char[MAX_INBOUND_PACKET_SIZE];
+char* resJson = new char[UDP_TX_PACKET_MAX_SIZE];
 
 long lastComm = 0;
 IPAddress owner;
 
-void readPacket()
+
+void loop ()
 {
-	// Get the size of the next available packet, 0 if there is no packet.
+	handleInboundPacket();
+}
+
+
+// Deal with a single incoming packet from anywhere.
+void handleInboundPacket()
+{
 	int packetSize = UDP.parsePacket();
 
 	if (packetSize) {
 
-		// Read the packet into the char array.
-		UDP.read(incoming, CHAR_BUFFER_SIZE);
+		UDP.read(reqJson, MAX_INBOUND_PACKET_SIZE);
+		logPacket("RECEIVED", packetSize, reqJson);
 
-		// Transform the char array into an object.
-		StaticJsonBuffer<JSON_BUFFER_SIZE> jsonBuffer;
-		JsonObject& request = jsonBuffer.parseObject(incoming);
+		StaticJsonBuffer<INBOUND_BUFFER_SIZE> jsonBufferIn;
+		JsonObject& request = jsonBufferIn.parseObject(reqJson);
 
-		// If it was valid JSON, try to use it as a command.
+		StaticJsonBuffer<UDP_TX_PACKET_MAX_SIZE> jsonBufferOut;
+		JsonObject& response = jsonBufferOut.createObject();
+
 		if (request.success()) {
-
-			handle(request);
-
+			handleRequest(request, response);
 		} else if (DEBUGGING) {
-
 			Serial.println("Ignoring bad json!");
 			request.printTo(Serial);
 			Serial.println();
-
 		}
 	}
 }
+
 
 // ============================================================================
 //	Commands
 // ============================================================================
 
-bool handle (JsonObject& request)
+
+bool handleRequest (JsonObject& req, JsonObject& res)
 {
-	if (request.containsKey("cmd")) {
+	if (req.containsKey("cmd")) {
 
-		String cmd = request["cmd"].asString();
+		const char* cmd = req["cmd"].asString();
+		Serial.println(cmd);
 
-		if (cmd.equals("ping")) { return handlePingCommand(request); }
-		if (cmd.equals("list")) { return handleListCommand(request); }
-		if (cmd.equals("get")) { return handleGetCommand(request); }
-		if (cmd.equals("set")) { return handleSetCommand(request); }
+		if (String("ping").equals(cmd)) { return handlePingCommand(res, res); }
+		if (String("list").equals(cmd)) { return handleListCommand(res, res); }
+		if (String("get").equals(cmd)) { return handleGetCommand(res, res); }
+		if (String("set").equals(cmd)) { return handleSetCommand(res, res); }
 
 		if (DEBUGGING) {
 			Serial.println(F("Ignoring unknown command!"));
+			return false;
 		}
-		return false;
 
 	} else if (DEBUGGING) {
 		Serial.println(F("Ignoring request without command!"));
+		return false;
 	}
-	return false;
 }
+
 
 bool isSame(IPAddress ip1, IPAddress ip2)
 {
@@ -148,65 +173,61 @@ bool isSame(IPAddress ip1, IPAddress ip2)
 		and ip1[3] == ip2[3];
 }
 
+
 // Currently, only accepts one controlling computer.
-bool handlePingCommand (JsonObject& req)
+bool handlePingCommand (JsonObject& req, JsonObject& res)
 {
-	if (req["ctl"] == 1 and lastComm == 0) {
-		if (DEBUGGING) {
-			Serial.println("Assigning owner.");
-		}
-		owner = UDP.remoteIP();
-		lastComm = millis();
-	}
-	return sendPongCommand(isSame(owner, UDP.remoteIP()), rov->channelCount());
+	int isCtl = req["ctl"];
+	Serial.println(isCtl);
+	if (req["ctl"].as<bool>() and lastComm == 0) { owner = UDP.remoteIP(); }
+	return sendPongCommand(res, isSame(owner, UDP.remoteIP()), attachments.size());
 }
 
 
 // Sends a pong command to the last UDP remote computer.
-bool sendPongCommand (bool controlling, int channelCount)
+bool sendPongCommand (JsonObject& res, bool controlling, int channelCount)
 {
-	const int BUFFER_SIZE = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(0);
-	StaticJsonBuffer<BUFFER_SIZE> jsonBuffer;
-	JsonObject& response = jsonBuffer.createObject();
-
-	response["cmd"] = "pong";
-	response["ctl"] = controlling;
-	response["chn"] = channelCount;
-
-	response.printTo(incoming, UDP_TX_PACKET_MAX_SIZE);
+	res["cmd"] = "pong";
+	res["ctl"] = controlling;
+	res["chn"] = channelCount;
+	res.printTo(resJson, UDP_TX_PACKET_MAX_SIZE);
+	logPacket("SEND", UDP_TX_PACKET_MAX_SIZE, resJson);
 	UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
-	UDP.write(incoming);
+	UDP.write(resJson);
 	UDP.endPacket();
 	return true;
 }
 
 
-bool handleListCommand (JsonObject& request)
+bool handleListCommand (JsonObject& req, JsonObject& res)
 {
 	return false;
 }
 
 
-bool handleGetCommand (JsonObject& request)
+bool handleGetCommand (JsonObject& req, JsonObject& res)
 {
 	return false;
 }
 
 
-bool handleSetCommand (JsonObject& request)
+bool handleSetCommand (JsonObject& req, JsonObject& res)
 {
 	return false;
 }
+
 
 // ============================================================================
 //	Debugging
 // ============================================================================
+
 
 int freeRam () {
 	extern int __heap_start, *__brkval;
 	int v;
 	return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval);
 }
+
 
 const char* ip_to_str(const IPAddress ipAddr)
 {
@@ -215,15 +236,30 @@ const char* ip_to_str(const IPAddress ipAddr)
 	return buf;
 }
 
+
 void logListeningAt()
 {
-	Serial.print(F("ROV joined network: "));
+	Serial.print(F("rov@"));
 	Serial.print(ip_to_str(Ethernet.localIP()));
 	Serial.print(F(":"));
 	Serial.println(PORT, DEC);
-	Serial.print("Free RAM: ");
-	Serial.print(freeRam(), DEC);
-	Serial.println(" bytes");
 	Serial.print(F("DEBUGGING: "));
 	Serial.println(DEBUGGING ? F("ON (Things will be slow!!!)") : F("OFF") );
+}
+
+
+void logPacket(char* message, int c, char* buffer)
+{
+	if (DEBUGGING) {
+		Serial.print(F("["));
+		Serial.print(message);
+		Serial.print(F("] ["));
+		Serial.print(c);
+		Serial.print(F(" bytes] "));
+		Serial.print(ip_to_str(UDP.remoteIP()));
+		Serial.print(F(":"));
+		Serial.println(UDP.remotePort());
+		Serial.print(F("[PACKET] "));
+		Serial.println(buffer);
+	}
 }

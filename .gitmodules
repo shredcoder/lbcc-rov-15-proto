@@ -7,3 +7,6 @@
 [submodule "lib/ethernet_shield_w5200"]
 	path = lib/ethernet_shield_w5200
 	url = https://github.com/seeed-studio/ethernet_shield_w5200
+[submodule "lib/Adafruit-PWM-Servo-Driver-Library"]
+	path = lib/Adafruit-PWM-Servo-Driver-Library
+	url = git://github.com/adafruit/Adafruit-PWM-Servo-Driver-Library
