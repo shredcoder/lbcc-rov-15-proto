@@ -4,3 +4,6 @@
 [submodule "lib/LinkedList"]
 	path = lib/LinkedList
 	url = https://github.com/ivanseidel/LinkedList
+[submodule "lib/ethernet_shield_w5200"]
+	path = lib/ethernet_shield_w5200
+	url = https://github.com/seeed-studio/ethernet_shield_w5200
