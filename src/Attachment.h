@@ -5,6 +5,8 @@ class Attachment
 	public:
 		char* name;
 		bool readonly;
+		int minValue;
+		int maxValue;
 		virtual int get() = 0;
 		virtual bool set(int) = 0;
 };
@@ -22,6 +24,4 @@ class MotorESC: public Attachment
 		int chan;
 		int value;
 		int zeroValue;
-		int minValue;
-		int maxValue;
 };

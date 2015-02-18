@@ -24,7 +24,7 @@
 
 // If true, you must suffer the wrath of a million Serial.println()s.
 // Please leave false unless you are developing or debugging.
-bool DEBUGGING = true;
+bool DEBUGGING = false;
 
 // MAC address--generally don't touch this, but can be different.
 byte MAC[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
@@ -165,7 +165,7 @@ bool handlePingCommand (JsonObject& req)
 // Sends a pong command to the last UDP remote computer.
 bool sendPongCommand (bool controlling, int channelCount)
 {
-	const int BUFFER_SIZE = JSON_OBJECT_SIZE(3) + JSON_ARRAY_SIZE(0);
+	const int BUFFER_SIZE = JSON_OBJECT_SIZE(3);
 	StaticJsonBuffer<BUFFER_SIZE> jsonBuffer;
 	JsonObject& response = jsonBuffer.createObject();
 
@@ -183,7 +183,44 @@ bool sendPongCommand (bool controlling, int channelCount)
 
 bool handleListCommand (JsonObject& request)
 {
-	return false;
+	const int BUFFER_SIZE = JSON_OBJECT_SIZE(7);
+
+	unsigned long start = millis();
+
+	for (int i = 0; i < rov->channelCount(); i++) {
+
+		int num = i + 1;
+
+		Attachment* a = rov->getChannel(num);
+
+		StaticJsonBuffer<BUFFER_SIZE> jsonBuffer;
+		JsonObject& response = jsonBuffer.createObject();
+
+		response["cmd"] = "chn";
+		response["num"] = num;
+		response["name"] = a->name;
+		response["read"] = a->readonly;
+		response["min"] = a->minValue;
+		response["max"] = a->maxValue;
+		response["now"] = a->get();
+
+		response.printTo(incoming, UDP_TX_PACKET_MAX_SIZE);
+		UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+		UDP.write(incoming);
+		UDP.endPacket();
+
+		if (DEBUGGING) {
+			response.printTo(Serial);
+			Serial.println();
+		}
+	}
+
+	if (DEBUGGING) {
+		unsigned long length = millis() - start;
+		Serial.print("Sent channels in ");
+		Serial.print(length);
+		Serial.println(" ms!");
+	}
 }
 
 
@@ -195,7 +232,64 @@ bool handleGetCommand (JsonObject& request)
 
 bool handleSetCommand (JsonObject& request)
 {
-	return false;
+	const int n = 16;
+	const int BUFFER_SIZE = JSON_OBJECT_SIZE(2+2*n) + JSON_ARRAY_SIZE(n);
+
+	StaticJsonBuffer<BUFFER_SIZE> jsonBuffer;
+	JsonObject& response = jsonBuffer.createObject();
+
+	response["cmd"] = "is";
+	JsonArray& list = response.createNestedArray("list");
+
+	if (request["list"].is<JsonArray&>())
+	{
+		int count = request["list"].size();
+
+		for (int i = 0; i < count; i++) {
+
+			int c = request["list"][i]["c"];
+			int v = request["list"][i]["v"];
+
+			if (c && c <= rov->channelCount() && c > 0) {
+
+				if (rov->getChannel(c)->set(v)) {
+
+					JsonObject& entry = list.createNestedObject();
+					entry["c"] = c;
+					entry["v"] = v;
+
+				} else if (DEBUGGING) {
+
+					Serial.println("Invalid channel value.");
+
+				}
+
+			} else if (DEBUGGING) {
+
+				Serial.println("Invalid channel");
+
+			}
+		}
+
+		response.printTo(incoming, UDP_TX_PACKET_MAX_SIZE);
+		UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+		UDP.write(incoming);
+		UDP.endPacket();
+
+		if (DEBUGGING) {
+			Serial.print("Set ");
+			Serial.print(count);
+			Serial.print(" channels: ");
+			Serial.print(freeRam(), DEC);
+			Serial.print(" bytes free.");
+			Serial.println();
+		}
+
+	} else if (DEBUGGING) {
+
+		Serial.println("set missing list");
+
+	}
 }
 
 // ============================================================================

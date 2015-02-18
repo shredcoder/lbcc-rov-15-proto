@@ -12,7 +12,8 @@ MotorESC::MotorESC(Adafruit_PWMServoDriver pwm, int freq, char* name, int chan, 
 	this->minValue		= low;
 	this->maxValue		= high;
 
-	this->set(value);
+	this->set(zero);
+	Serial.println(zero);
 }
 
 int MotorESC::get()

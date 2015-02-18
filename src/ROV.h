@@ -12,6 +12,7 @@ class ROV
 	public:
 		ROV();
 		int channelCount();
+		Attachment* getChannel(int);
 	private:
 		Adafruit_PWMServoDriver pwm;
 		LinkedList<Attachment*> list;
